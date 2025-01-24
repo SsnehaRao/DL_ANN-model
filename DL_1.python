@@ -1,0 +1,95 @@
+!pip install ydata-profiling livelossplot
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.optimizers import SGD, Adam
+from tensorflow.keras.callbacks import EarlyStopping
+from ydata_profiling import ProfileReport
+from livelossplot import PlotLossesKerasTF
+
+# Load the dataset
+data = pd.read_csv('/content/Insurance Costs - Insurance Costs.csv')
+
+# EDA using ydata-profiling
+profile = ProfileReport(data)
+profile.to_file("insurance_eda_report.html")
+
+# Data Preprocessing
+X = data.drop(columns=['total_charges'])
+y = data['total_charges']
+X = pd.get_dummies(X, drop_first=True)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+
+# Function to create and compile the model
+def create_model(optimizer='sgd', learning_rate=0.01):
+    model = Sequential()
+    model.add(Dense(128, input_dim=X_train.shape[1], activation='relu'))
+    model.add(Dense(64, activation='relu'))
+    model.add(Dense(1)) # Regression output
+    model.compile(optimizer=optimizer, loss='mean_squared_error', metrics=['mae'])
+    return model
+
+# Experiment with different optimizers
+optimizers = {
+    'SGD': SGD(learning_rate=0.01),
+    'Momentum': SGD(learning_rate=0.01, momentum=0.9),
+    'Nesterov': SGD(learning_rate=0.01, momentum=0.9, nesterov=True)
+}
+
+# Experiment with different hyperparameters with reduced runtime
+epochs = [5, 10]
+batch_sizes = [32, 64]  # Slightly larger batch sizes to speed up computation
+results = {}
+
+for opt_name in optimizers.keys():
+    for epoch in epochs:
+        for batch_size in batch_sizes:
+            # Recreate the optimizer for each new model instance
+            opt = optimizers[opt_name]  # Retrieve the optimizer configuration
+            model = create_model(optimizer=opt.__class__(**opt.get_config()))  # Create a new instance of the optimizer
+            history = model.fit(
+                X_train, y_train,
+                epochs=epoch,
+                batch_size=batch_size,
+                validation_data=(X_test, y_test),
+                verbose=0  # Suppress verbose output to speed up
+            )
+            val_mae = model.evaluate(X_test, y_test, verbose=0)[1]
+            results[(opt_name, epoch, batch_size)] = val_mae
+
+# Display the best combination
+best_hyperparams = min(results, key=results.get)
+print("Best Hyperparameters:", best_hyperparams)
+print("Validation MAE with best model:", results[best_hyperparams])
+
+# Save the best model
+best_hyperparams = min(results, key=results.get)
+best_optimizer_name = best_hyperparams[0]
+best_epoch = best_hyperparams[1]
+best_batch_size = best_hyperparams[2]
+
+# Recreate the optimizer instance for the best hyperparameters
+best_optimizer = optimizers[best_optimizer_name].__class__(**optimizers[best_optimizer_name].get_config())
+
+# Create and train the best model
+best_model = create_model(optimizer=best_optimizer)
+best_model.fit(X_train, y_train, epochs=best_epoch, batch_size=best_batch_size, verbose=0)
+best_model.save("best_insurance_model.h5")
+
+print(f"Best model saved with optimizer: {best_optimizer_name}, epochs: {best_epoch}, batch size: {best_batch_size}")
+
+# Display the results
+print("Best Hyperparameters:")
+print(f"Optimizer: {best_optimizer_name}")
+print(f"Epochs: {best_epoch}")
+print(f"Batch Size: {best_batch_size}")
+print(f"Validation MAE: {results[best_hyperparams]}")
+print("Best model saved as 'best_insurance_model.h5'")
